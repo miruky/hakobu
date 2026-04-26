@@ -1,0 +1,46 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hakobu"
+version = "0.1.0"
+description = "Pythonアプリの配布ツールチェーン。ビルド・署名・差分配布・自動更新を一貫して扱う"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "miruky" }]
+requires-python = ">=3.12"
+dependencies = ["cryptography>=42"]
+keywords = ["distribution", "auto-update", "code-signing", "delta-update", "packaging"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: System :: Software Distribution",
+]
+
+[project.urls]
+Repository = "https://github.com/miruky/hakobu"
+
+[project.scripts]
+hakobu = "hakobu.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.6"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["hakobu"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
