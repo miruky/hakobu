@@ -44,6 +44,26 @@ def test_fail_prefixes_and_goes_to_stderr(capsys, monkeypatch):
     assert capsys.readouterr().err == "エラー: 壊れた\n"
 
 
+class _FakeTTY(io.StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
+def test_progress_updates_line_on_tty(monkeypatch):
+    monkeypatch.setenv("NO_COLOR", "1")
+    tty = _FakeTTY()
+    console.progress(1, 3, "検証中", stream=tty)
+    assert tty.getvalue() == "\r検証中 (1/3)"
+    console.progress(3, 3, "検証中", stream=tty)
+    assert tty.getvalue().endswith("\r検証中 (3/3)\n")
+
+
+def test_progress_is_silent_on_non_tty():
+    plain = io.StringIO()
+    console.progress(2, 5, "x", stream=plain)
+    assert plain.getvalue() == ""
+
+
 def test_runnable_as_module():
     result = subprocess.run(
         [sys.executable, "-m", "hakobu", "--version"],
