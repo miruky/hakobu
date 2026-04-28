@@ -55,3 +55,17 @@ def heading(message: str) -> None:
 
 def fail(message: str) -> None:
     print(style(f"エラー: {message}", "error"), file=sys.stderr)
+
+
+def progress(current: int, total: int, label: str, *, stream: IO[str] | None = None) -> None:
+    """同じ行を上書きしながら進捗を見せる。完了(current>=total)で改行する。
+
+    対話的な端末でだけ動く。ログやCIへ流すとき(非TTY)は1行も出さず、
+    出力を進捗の断片で汚さない。
+    """
+    target = stream if stream is not None else sys.stdout
+    if not (hasattr(target, "isatty") and target.isatty()):
+        return
+    body = style(f"{label} ({current}/{total})", "dim", stream=target)
+    target.write("\r" + body + ("\n" if current >= total else ""))
+    target.flush()
