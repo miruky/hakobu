@@ -1,7 +1,8 @@
 """hakobu全体で使う例外。
 
 呼び出し側(CLI・自動更新クライアント)が原因別に扱えるよう、
-設定・検証・更新の3系統に分ける。
+設定・取得・検証・更新の系統に分ける。すべて HakobuError を継承するので、
+CLIは基底だけを捕まえて利用者向けのメッセージに変換できる。
 """
 
 
@@ -11,6 +12,10 @@ class HakobuError(Exception):
 
 class ConfigError(HakobuError):
     """hakobu.toml やリポジトリ構成の不備。"""
+
+
+class SourceError(HakobuError):
+    """リポジトリの読み出しに失敗した。接続不可・不在・HTTPエラーなど。"""
 
 
 class VerificationError(HakobuError):
