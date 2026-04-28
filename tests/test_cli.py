@@ -96,3 +96,33 @@ def test_update_when_current_says_so(tmp_path, keyset, capsys):
 def test_error_paths_return_nonzero(tmp_path, capsys):
     assert main(["status", "--dest", str(tmp_path / "nai")]) == 1
     assert "エラー:" in capsys.readouterr().err
+
+
+def test_list_shows_releases(tmp_path, keyset, capsys):
+    private, _ = keyset
+    repo = tmp_path / "repo"
+    v1 = write_project(tmp_path / "src1", "1.0.0")
+    main(["publish", str(v1), "--repo", str(repo), "--key", str(private), "--notes", "初版"])
+    v2 = write_project(tmp_path / "src2", "1.1.0", V2_FILES)
+    main(["publish", str(v2), "--repo", str(repo), "--key", str(private)])
+    capsys.readouterr()
+    assert main(["list", "--repo", str(repo)]) == 0
+    out = capsys.readouterr().out
+    assert "リリース 2 件" in out
+    assert "1.1.0" in out
+    assert "1.0.0" in out
+    assert "初版" in out
+
+
+def test_quiet_suppresses_success_output(tmp_path, keyset, capsys):
+    private, _ = keyset
+    repo = tmp_path / "repo"
+    v1 = write_project(tmp_path / "src1", "1.0.0")
+    capsys.readouterr()
+    assert main(["--quiet", "publish", str(v1), "--repo", str(repo), "--key", str(private)]) == 0
+    assert "公開した" not in capsys.readouterr().out
+
+
+def test_quiet_still_reports_errors(tmp_path, capsys):
+    assert main(["--quiet", "status", "--dest", str(tmp_path / "nai")]) == 1
+    assert "エラー:" in capsys.readouterr().err
