@@ -106,7 +106,9 @@ def _cmd_build(args: argparse.Namespace) -> int:
 
 def _cmd_publish(args: argparse.Namespace) -> int:
     key = keys.load_private(args.key)
+    console.detail("  ビルド中…")
     result = bundle.build(args.project, args.repo / "archives")
+    console.detail("  署名して公開中…")
     release = Repository(args.repo).publish(
         result,
         key,
@@ -127,17 +129,16 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     signature = (args.repo / "manifest.json.sig").read_text(encoding="ascii").strip()
     keys.verify(public, data, signature)
     manifest = repo.load_manifest()
-    checked = 0
-    for release in manifest.releases:
-        for artifact in [release.archive, *release.patches]:
-            path = args.repo / artifact.name
-            if hash_file(path) != artifact.sha256:
-                raise VerificationError(f"{artifact.name} のハッシュが合わない")
-            keys.verify(public, path.read_bytes(), artifact.signature)
-            checked += 1
+    artifacts = [a for release in manifest.releases for a in [release.archive, *release.patches]]
+    for index, artifact in enumerate(artifacts, start=1):
+        path = args.repo / artifact.name
+        if hash_file(path) != artifact.sha256:
+            raise VerificationError(f"{artifact.name} のハッシュが合わない")
+        keys.verify(public, path.read_bytes(), artifact.signature)
+        console.progress(index, len(artifacts), "  検証中")
     console.success("署名とハッシュをすべて検証した")
     console.detail(f"  アプリ: {manifest.app}({manifest.channel} チャネル)")
-    console.detail(f"  リリース {len(manifest.releases)} 件 / 成果物 {checked} 件")
+    console.detail(f"  リリース {len(manifest.releases)} 件 / 成果物 {len(artifacts)} 件")
     return 0
 
 
