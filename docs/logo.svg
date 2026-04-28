@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="hakobu">
+  <title>hakobu</title>
+  <style>
+    svg {
+      --ink: #1f2328;
+      --accent: #c66b2e;
+      color: var(--ink);
+    }
+    @media (prefers-color-scheme: dark) {
+      svg { --ink: #e6edf3; }
+    }
+  </style>
+  <g fill="none" stroke="currentColor" stroke-width="6" stroke-linejoin="round">
+    <path d="M28 58 L64 42 L100 58 L100 96 L64 112 L28 96 Z"/>
+    <path d="M28 58 L64 74 L100 58"/>
+    <path d="M64 74 L64 112"/>
+  </g>
+  <path d="M40 24 C56 10 84 12 96 30" fill="none" stroke="var(--accent)" stroke-width="6" stroke-linecap="round"/>
+  <path d="M96 14 L98 32 L80 30" fill="none" stroke="var(--accent)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
