@@ -7,10 +7,9 @@
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
-from . import __version__, bundle, keys
+from . import __version__, bundle, console, keys
 from .errors import HakobuError, VerificationError
 from .hashing import hash_file
 from .repo import Repository
@@ -26,7 +25,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return args.handler(args)
     except HakobuError as error:
-        print(f"エラー: {error}", file=sys.stderr)
+        console.fail(str(error))
         return 1
 
 
@@ -90,16 +89,18 @@ def _cmd_keygen(args: argparse.Namespace) -> int:
     key = keys.generate()
     keys.save_private(key, private_path)
     (args.dir / PUBLIC_KEY_NAME).write_text(keys.public_text(key) + "\n", encoding="ascii")
-    print(f"秘密鍵: {private_path}(リリース担当者だけが持つ)")
-    print(f"公開鍵: {args.dir / PUBLIC_KEY_NAME}(アプリ側に同梱する)")
+    console.success("署名鍵ペアを作成した")
+    console.detail(f"  秘密鍵: {private_path}(リリース担当者だけが持つ)")
+    console.detail(f"  公開鍵: {args.dir / PUBLIC_KEY_NAME}(アプリ側に同梱する)")
     return 0
 
 
 def _cmd_build(args: argparse.Namespace) -> int:
     result = bundle.build(args.project, args.out)
-    print(f"{result.name} {result.version} をビルドした")
-    print(f"  {result.archive}({result.archive.stat().st_size} bytes, {len(result.files)} files)")
-    print(f"  sha256: {hash_file(result.archive)}")
+    size = result.archive.stat().st_size
+    console.success(f"{result.name} {result.version} をビルドした")
+    console.detail(f"  {result.archive}({size} bytes, {len(result.files)} files)")
+    console.detail(f"  sha256: {hash_file(result.archive)}")
     return 0
 
 
@@ -113,9 +114,9 @@ def _cmd_publish(args: argparse.Namespace) -> int:
         notes=args.notes,
         max_patches=args.max_patches,
     )
-    print(f"{result.name} {release.version} を {args.channel} チャネルへ公開した")
+    console.success(f"{result.name} {release.version} を {args.channel} チャネルへ公開した")
     for patch in release.patches:
-        print(f"  差分: {patch.from_version} から({patch.size} bytes)")
+        console.detail(f"  差分: {patch.from_version} から({patch.size} bytes)")
     return 0
 
 
@@ -134,15 +135,16 @@ def _cmd_verify(args: argparse.Namespace) -> int:
                 raise VerificationError(f"{artifact.name} のハッシュが合わない")
             keys.verify(public, path.read_bytes(), artifact.signature)
             checked += 1
-    print(f"{manifest.app}({manifest.channel}): リリース {len(manifest.releases)} 件、")
-    print(f"成果物 {checked} 件の署名とハッシュをすべて検証した")
+    console.success("署名とハッシュをすべて検証した")
+    console.detail(f"  アプリ: {manifest.app}({manifest.channel} チャネル)")
+    console.detail(f"  リリース {len(manifest.releases)} 件 / 成果物 {checked} 件")
     return 0
 
 
 def _cmd_install(args: argparse.Namespace) -> int:
     updater = _updater(args)
     release = updater.install(args.app_version)
-    print(f"{release.version} を {args.dest} へ導入した")
+    console.success(f"{release.version} を {args.dest} へ導入した")
     return 0
 
 
@@ -150,20 +152,20 @@ def _cmd_update(args: argparse.Namespace) -> int:
     updater = _updater(args)
     plan = updater.check()
     if plan is None:
-        print("最新の状態にある")
+        console.success("最新の状態にある")
         return 0
     how = "差分パッチ" if plan.delta else "完全アーカイブ"
     if args.check:
-        print(f"{plan.current} から {plan.target.version} へ更新できる({how})")
+        console.success(f"{plan.current} から {plan.target.version} へ更新できる({how})")
         return 0
     release = updater.apply(plan)
-    print(f"{plan.current} から {release.version} へ更新した({how})")
+    console.success(f"{plan.current} から {release.version} へ更新した({how})")
     return 0
 
 
 def _cmd_status(args: argparse.Namespace) -> int:
     state = State.load(args.dest)
-    print(f"{state.app} {state.version}({state.channel} チャネル)")
+    console.heading(f"{state.app} {state.version}({state.channel} チャネル)")
     return 0
 
 
