@@ -2,7 +2,16 @@ from pathlib import Path
 
 import pytest
 
-from hakobu import keys
+from hakobu import console, keys
+
+
+@pytest.fixture(autouse=True)
+def _reset_console():
+    """consoleのquietはモジュール全体で共有されるので、毎テスト前に戻す。"""
+    console.set_quiet(False)
+    yield
+    console.set_quiet(False)
+
 
 DEFAULT_FILES = {
     "uranai/__init__.py": "VERSION = '{version}'\n",

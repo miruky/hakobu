@@ -22,6 +22,7 @@ PUBLIC_KEY_NAME = "signing.pub"
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    console.set_quiet(args.quiet)
     try:
         return args.handler(args)
     except HakobuError as error:
@@ -35,6 +36,12 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Pythonアプリの配布ツールチェーン。ビルド・署名・差分配布・自動更新",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    parser.add_argument(
+        "--quiet",
+        "-q",
+        action="store_true",
+        help="エラー以外の出力を抑える(サブコマンドの前に置く)",
+    )
     sub = parser.add_subparsers(required=True)
 
     keygen = sub.add_parser("keygen", help="署名鍵ペアを作る")
@@ -77,6 +84,10 @@ def _build_parser() -> argparse.ArgumentParser:
     status = sub.add_parser("status", help="導入済みのアプリとバージョンを表示する")
     status.add_argument("--dest", type=Path, required=True)
     status.set_defaults(handler=_cmd_status)
+
+    listing = sub.add_parser("list", help="リポジトリのリリース一覧を表示する")
+    listing.add_argument("--repo", type=Path, required=True, help="リリースリポジトリ")
+    listing.set_defaults(handler=_cmd_list)
 
     return parser
 
@@ -168,6 +179,28 @@ def _cmd_status(args: argparse.Namespace) -> int:
     state = State.load(args.dest)
     console.heading(f"{state.app} {state.version}({state.channel} チャネル)")
     return 0
+
+
+def _cmd_list(args: argparse.Namespace) -> int:
+    manifest = Repository(args.repo).load_manifest()
+    header = f"{manifest.app}({manifest.channel} チャネル): リリース {len(manifest.releases)} 件"
+    console.heading(header)
+    for release in sorted(manifest.releases, key=lambda r: r.created, reverse=True):
+        date = release.created[:10]
+        size = _human_size(release.archive.size)
+        note = f"  {release.notes}" if release.notes else ""
+        row = f"  {release.version:<10} {date}  {size:>9}  パッチ{len(release.patches)}"
+        console.line(row + note)
+    return 0
+
+
+def _human_size(num_bytes: int) -> str:
+    size = float(num_bytes)
+    for unit in ("B", "KB", "MB"):
+        if size < 1024:
+            return f"{int(size)} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} GB"
 
 
 def _updater(args: argparse.Namespace) -> Updater:

@@ -21,6 +21,14 @@ _CODES = {
     "dim": "2",
 }
 
+_quiet = False
+
+
+def set_quiet(flag: bool) -> None:
+    """True にすると、エラー以外の出力(成功・補足・進捗)を止める。"""
+    global _quiet
+    _quiet = flag
+
 
 def use_color(stream: IO[str]) -> bool:
     """この出力先に色を付けてよいか。NO_COLOR と非TTYでは付けない。"""
@@ -41,16 +49,29 @@ def style(text: str, kind: str, *, stream: IO[str] | None = None) -> str:
 
 
 def success(message: str) -> None:
+    if _quiet:
+        return
     print(style(message, "success"))
 
 
 def detail(message: str) -> None:
     """主要メッセージに添える補足。控えめに表示する。"""
+    if _quiet:
+        return
     print(style(message, "dim"))
 
 
 def heading(message: str) -> None:
+    if _quiet:
+        return
     print(style(message, "head"))
+
+
+def line(message: str) -> None:
+    """一覧などの主たる内容。装飾はしないが、--quiet では抑える。"""
+    if _quiet:
+        return
+    print(message)
 
 
 def fail(message: str) -> None:
@@ -63,6 +84,8 @@ def progress(current: int, total: int, label: str, *, stream: IO[str] | None = N
     対話的な端末でだけ動く。ログやCIへ流すとき(非TTY)は1行も出さず、
     出力を進捗の断片で汚さない。
     """
+    if _quiet:
+        return
     target = stream if stream is not None else sys.stdout
     if not (hasattr(target, "isatty") and target.isatty()):
         return
