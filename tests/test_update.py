@@ -50,6 +50,14 @@ class TestInstall:
         with pytest.raises(UpdateError):
             Updater(str(repo.root), dest, public_text).install()
 
+    def test_creates_missing_parent_dirs(self, tmp_path, repo, public_text):
+        # ~/apps/foo のように親がまだ無いパスへも新規導入できる。
+        dest = tmp_path / "nai" / "fukai" / "app"
+        release = Updater(str(repo.root), dest, public_text).install()
+        assert release.version == "1.0.0"
+        assert (dest / "uranai" / "main.py").is_file()
+        assert State.load(dest).version == "1.0.0"
+
     def test_specific_version(self, tmp_path, repo, signing_key, public_text):
         publish_v2(tmp_path, repo, signing_key)
         dest = tmp_path / "pinned"
