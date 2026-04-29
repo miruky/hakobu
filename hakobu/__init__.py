@@ -3,9 +3,9 @@
 __version__ = "0.1.0"
 
 from .bundle import BuildResult, BundleConfig, build
-from .errors import ConfigError, HakobuError, UpdateError, VerificationError
+from .errors import ConfigError, HakobuError, SourceError, UpdateError, VerificationError
 from .manifest import Artifact, Manifest, Patch, Release
-from .repo import Repository
+from .repo import PruneResult, Repository
 from .update import Source, State, UpdatePlan, Updater
 
 __all__ = [
@@ -16,9 +16,11 @@ __all__ = [
     "HakobuError",
     "Manifest",
     "Patch",
+    "PruneResult",
     "Release",
     "Repository",
     "Source",
+    "SourceError",
     "State",
     "UpdateError",
     "UpdatePlan",
