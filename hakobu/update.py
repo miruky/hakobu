@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,24 +27,50 @@ from . import keys
 from . import version as version_mod
 from .bundle import extract_archive
 from .delta import apply_patch
-from .errors import UpdateError, VerificationError
+from .errors import SourceError, UpdateError, VerificationError
 from .hashing import STATE_FILE_NAME, hash_bytes, hash_tree
 from .manifest import Artifact, Manifest, Release
 from .repo import MANIFEST_NAME, SIGNATURE_NAME
 
+DEFAULT_TIMEOUT = 30.0
+"""URLリポジトリへの接続・読み出しの既定タイムアウト(秒)。"""
+
 
 class Source:
-    """リポジトリの読み出し口。ローカルパスと http(s) URLを同じ顔で扱う。"""
+    """リポジトリの読み出し口。ローカルパスと http(s) URLを同じ顔で扱う。
 
-    def __init__(self, location: str) -> None:
+    取得の失敗はすべて SourceError に正規化する。接続不可・404・タイムアウト・
+    ファイル不在のどれであっても、呼び出し側は同じ例外で扱える。
+    """
+
+    def __init__(self, location: str, *, timeout: float = DEFAULT_TIMEOUT) -> None:
         self.location = location.rstrip("/")
         self._is_url = location.startswith(("http://", "https://"))
+        self.timeout = timeout
 
     def read(self, rel: str) -> bytes:
         if self._is_url:
-            with urllib.request.urlopen(f"{self.location}/{rel}") as response:
+            return self._read_url(f"{self.location}/{rel}", rel)
+        path = Path(self.location) / rel
+        try:
+            return path.read_bytes()
+        except FileNotFoundError as error:
+            raise SourceError(f"リポジトリに {rel} がない: {path}") from error
+        except OSError as error:
+            raise SourceError(f"リポジトリを読めない: {path}({error})") from error
+
+    def _read_url(self, url: str, rel: str) -> bytes:
+        try:
+            with urllib.request.urlopen(url, timeout=self.timeout) as response:
                 return response.read()
-        return (Path(self.location) / rel).read_bytes()
+        except urllib.error.HTTPError as error:
+            raise SourceError(
+                f"リポジトリから {rel} を取得できない(HTTP {error.code}): {url}"
+            ) from error
+        except urllib.error.URLError as error:
+            raise SourceError(f"リポジトリに接続できない: {url}({error.reason})") from error
+        except TimeoutError as error:
+            raise SourceError(f"リポジトリへの接続がタイムアウトした: {url}") from error
 
 
 @dataclass
@@ -97,13 +124,15 @@ class Updater:
             raise UpdateError(f"インストール先が空でない: {self.install_dir}")
         manifest = self.fetch_manifest()
         release = manifest.release(target_version) if target_version else manifest.latest()
+        # 作業用の一時ディレクトリは入れ替え先と同じ親に置く(renameを同一FS内に保つ)
+        # ため、親を先に用意しておく。深いパスへの新規導入でもここで作られる。
+        self.install_dir.parent.mkdir(parents=True, exist_ok=True)
         with TemporaryDirectory(dir=self.install_dir.parent) as tmp:
             staging = Path(tmp) / "tree"
             self._stage_full(release, staging)
             State(app=manifest.app, channel=manifest.channel, version=release.version).write(
                 staging
             )
-            self.install_dir.parent.mkdir(parents=True, exist_ok=True)
             if self.install_dir.exists():
                 self.install_dir.rmdir()
             staging.rename(self.install_dir)
