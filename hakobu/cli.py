@@ -68,7 +68,14 @@ def _build_parser() -> argparse.ArgumentParser:
     verify = sub.add_parser("verify", help="リポジトリ全体の署名とハッシュを検証する")
     verify.add_argument("--repo", type=Path, required=True)
     verify.add_argument("--pub", type=Path, required=True, help="公開鍵ファイル")
+    verify.add_argument("--json", action="store_true", help="検証結果をJSONで出力する")
     verify.set_defaults(handler=_cmd_verify)
+
+    prune = sub.add_parser("prune", help="古いリリースをリポジトリから取り除く")
+    prune.add_argument("--repo", type=Path, required=True, help="リリースリポジトリ")
+    prune.add_argument("--key", type=Path, required=True, help="マニフェスト再署名用の秘密鍵")
+    prune.add_argument("--keep", type=int, required=True, help="残す最新リリースの数")
+    prune.set_defaults(handler=_cmd_prune)
 
     install = sub.add_parser("install", help="リポジトリから新規に導入する")
     install.add_argument("--repo", required=True, help="リポジトリのパスかURL")
@@ -111,6 +118,7 @@ def _cmd_keygen(args: argparse.Namespace) -> int:
     console.success("署名鍵ペアを作成した")
     console.detail(f"  秘密鍵: {private_path}(リリース担当者だけが持つ)")
     console.detail(f"  公開鍵: {args.dir / PUBLIC_KEY_NAME}(アプリ側に同梱する)")
+    console.detail(f"  指紋: {keys.fingerprint(key.public_key())}")
     return 0
 
 
@@ -144,11 +152,29 @@ def _cmd_publish(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_prune(args: argparse.Namespace) -> int:
+    try:
+        key = keys.load_private(args.key)
+    except FileNotFoundError as error:
+        raise ConfigError(f"秘密鍵が見つからない: {args.key}") from error
+    result = Repository(args.repo).prune(key, keep=args.keep)
+    if not result.removed_versions:
+        console.success(f"最新 {args.keep} 件に収まっており、取り除くリリースはなかった")
+        return 0
+    console.success(f"{len(result.removed_versions)} 件のリリースを取り除いた")
+    console.detail(f"  バージョン: {', '.join(result.removed_versions)}")
+    console.detail(f"  ファイル {len(result.removed_files)} 件を削除した")
+    return 0
+
+
 def _cmd_verify(args: argparse.Namespace) -> int:
     public = keys.public_from_text(_public_text(args.pub))
     repo = Repository(args.repo)
-    data = repo.manifest_path().read_bytes()
-    signature = (args.repo / "manifest.json.sig").read_text(encoding="ascii").strip()
+    try:
+        data = repo.manifest_path().read_bytes()
+        signature = (args.repo / "manifest.json.sig").read_text(encoding="ascii").strip()
+    except FileNotFoundError as error:
+        raise ConfigError(f"リポジトリにマニフェストか署名がない: {args.repo}") from error
     keys.verify(public, data, signature)
     manifest = repo.load_manifest()
     artifacts = [a for release in manifest.releases for a in [release.archive, *release.patches]]
@@ -157,10 +183,24 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         if hash_file(path) != artifact.sha256:
             raise VerificationError(f"{artifact.name} のハッシュが合わない")
         keys.verify(public, path.read_bytes(), artifact.signature)
-        console.progress(index, len(artifacts), "  検証中")
+        if not args.json:
+            console.progress(index, len(artifacts), "  検証中")
+    if args.json:
+        _emit_json(
+            {
+                "app": manifest.app,
+                "channel": manifest.channel,
+                "releases": len(manifest.releases),
+                "artifacts": len(artifacts),
+                "fingerprint": keys.fingerprint(public),
+                "verified": True,
+            }
+        )
+        return 0
     console.success("署名とハッシュをすべて検証した")
     console.detail(f"  アプリ: {manifest.app}({manifest.channel} チャネル)")
     console.detail(f"  リリース {len(manifest.releases)} 件 / 成果物 {len(artifacts)} 件")
+    console.detail(f"  鍵の指紋: {keys.fingerprint(public)}")
     return 0
 
 
