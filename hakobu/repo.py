@@ -15,6 +15,7 @@ from tempfile import TemporaryDirectory
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from . import keys
+from . import version as version_mod
 from .bundle import BuildResult, extract_archive
 from .delta import make_patch
 from .errors import ConfigError
@@ -25,6 +26,14 @@ MANIFEST_NAME = "manifest.json"
 SIGNATURE_NAME = "manifest.json.sig"
 ARCHIVE_DIR = "archives"
 PATCH_DIR = "patches"
+
+
+@dataclass
+class PruneResult:
+    """prune が取り除いたリリースと、実際に消したファイルの記録。"""
+
+    removed_versions: list[str]
+    removed_files: list[str]
 
 
 @dataclass
@@ -75,6 +84,46 @@ class Repository:
         manifest.updated = now_utc()
         self._write_signed(manifest, key)
         return release
+
+    def prune(self, key: Ed25519PrivateKey, *, keep: int) -> PruneResult:
+        """新しい方から keep 件のリリースだけを残し、残りを取り除く。
+
+        消えるバージョンのアーカイブとパッチに加え、残すリリースが持つ
+        「消えるバージョンからの差分パッチ」も用済みなので削除する。
+        その後マニフェストを書き直して署名し直す。
+        """
+        if keep < 1:
+            raise ConfigError("keep は1以上にする")
+        manifest = self.load_manifest()
+        ordered = sorted(
+            manifest.releases, key=lambda r: version_mod.parse(r.version), reverse=True
+        )
+        keep_versions = {release.version for release in ordered[:keep]}
+        dropped = [r for r in manifest.releases if r.version not in keep_versions]
+        if not dropped:
+            return PruneResult(removed_versions=[], removed_files=[])
+
+        dropped_versions = {release.version for release in dropped}
+        removed_files: list[str] = []
+        for release in dropped:
+            removed_files.extend(art.name for art in (release.archive, *release.patches))
+
+        kept = [r for r in manifest.releases if r.version in keep_versions]
+        for release in kept:
+            stale = [p for p in release.patches if p.from_version in dropped_versions]
+            removed_files.extend(patch.name for patch in stale)
+            release.patches = [p for p in release.patches if p.from_version not in dropped_versions]
+
+        for rel in dict.fromkeys(removed_files):
+            (self.root / rel).unlink(missing_ok=True)
+
+        manifest.releases = kept
+        manifest.updated = now_utc()
+        self._write_signed(manifest, key)
+        return PruneResult(
+            removed_versions=sorted(dropped_versions, key=version_mod.parse),
+            removed_files=list(dict.fromkeys(removed_files)),
+        )
 
     def _build_patches(
         self,

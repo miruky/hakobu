@@ -1,5 +1,7 @@
 """CLIを実際のリリースフローの順に通すテスト。"""
 
+import json
+
 import pytest
 
 from hakobu.cli import main
@@ -126,3 +128,147 @@ def test_quiet_suppresses_success_output(tmp_path, keyset, capsys):
 def test_quiet_still_reports_errors(tmp_path, capsys):
     assert main(["--quiet", "status", "--dest", str(tmp_path / "nai")]) == 1
     assert "エラー:" in capsys.readouterr().err
+
+
+def _install_v1(tmp_path, keyset):
+    """v1 を公開して導入し、(repo, dest, public) を返す。"""
+    private, public = keyset
+    repo = tmp_path / "repo"
+    dest = tmp_path / "app"
+    v1 = write_project(tmp_path / "src1", "1.0.0")
+    main(["publish", str(v1), "--repo", str(repo), "--key", str(private)])
+    main(["install", "--repo", str(repo), "--pub", str(public), "--dest", str(dest)])
+    return repo, dest, public
+
+
+def test_install_into_missing_parent(tmp_path, keyset, capsys):
+    private, public = keyset
+    repo = tmp_path / "repo"
+    v1 = write_project(tmp_path / "src1", "1.0.0")
+    main(["publish", str(v1), "--repo", str(repo), "--key", str(private)])
+    dest = tmp_path / "nai" / "fukai" / "app"
+    assert main(["install", "--repo", str(repo), "--pub", str(public), "--dest", str(dest)]) == 0
+    assert (dest / "uranai" / "main.py").is_file()
+
+
+def test_missing_repo_reports_clean_error(tmp_path, keyset, capsys):
+    _, public = keyset
+    code = main(
+        [
+            "install",
+            "--repo",
+            str(tmp_path / "nai-repo"),
+            "--pub",
+            str(public),
+            "--dest",
+            str(tmp_path / "app"),
+        ]
+    )
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "エラー:" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_missing_public_key_reports_clean_error(tmp_path, keyset, capsys):
+    private, _ = keyset
+    repo = tmp_path / "repo"
+    v1 = write_project(tmp_path / "src1", "1.0.0")
+    main(["publish", str(v1), "--repo", str(repo), "--key", str(private)])
+    capsys.readouterr()
+    code = main(
+        [
+            "install",
+            "--repo",
+            str(repo),
+            "--pub",
+            str(tmp_path / "nai.pub"),
+            "--dest",
+            str(tmp_path / "app"),
+        ]
+    )
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "公開鍵を読めない" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_missing_private_key_reports_clean_error(tmp_path, capsys):
+    repo = tmp_path / "repo"
+    v1 = write_project(tmp_path / "src1", "1.0.0")
+    code = main(["publish", str(v1), "--repo", str(repo), "--key", str(tmp_path / "nai.key")])
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "秘密鍵が見つからない" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_status_json(tmp_path, keyset, capsys):
+    _, dest, _ = _install_v1(tmp_path, keyset)
+    capsys.readouterr()
+    assert main(["status", "--dest", str(dest), "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {"app": "uranai", "channel": "stable", "version": "1.0.0"}
+
+
+def test_list_json(tmp_path, keyset, capsys):
+    private, _ = keyset
+    repo = tmp_path / "repo"
+    v1 = write_project(tmp_path / "src1", "1.0.0")
+    main(["publish", str(v1), "--repo", str(repo), "--key", str(private), "--notes", "初版"])
+    v2 = write_project(tmp_path / "src2", "1.1.0", V2_FILES)
+    main(["publish", str(v2), "--repo", str(repo), "--key", str(private)])
+    capsys.readouterr()
+    assert main(["list", "--repo", str(repo), "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["app"] == "uranai"
+    versions = [r["version"] for r in payload["releases"]]
+    assert versions == ["1.1.0", "1.0.0"]
+    v1_record = next(r for r in payload["releases"] if r["version"] == "1.0.0")
+    assert v1_record["notes"] == "初版"
+    assert isinstance(v1_record["size"], int)
+    v2_record = next(r for r in payload["releases"] if r["version"] == "1.1.0")
+    assert v2_record["patches"] == ["1.0.0"]
+
+
+def test_update_check_json_reports_available(tmp_path, keyset, capsys):
+    repo, dest, public = _install_v1(tmp_path, keyset)
+    private, _ = keyset
+    v2 = write_project(tmp_path / "src2", "1.1.0", V2_FILES)
+    main(["publish", str(v2), "--repo", str(repo), "--key", str(private)])
+    capsys.readouterr()
+    args = ["update", "--repo", str(repo), "--pub", str(public), "--dest", str(dest)]
+    assert main([*args, "--check", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {
+        "current": "1.0.0",
+        "available": True,
+        "target": "1.1.0",
+        "delta": True,
+        "applied": False,
+    }
+
+
+def test_update_json_up_to_date(tmp_path, keyset, capsys):
+    repo, dest, public = _install_v1(tmp_path, keyset)
+    capsys.readouterr()
+    args = ["update", "--repo", str(repo), "--pub", str(public), "--dest", str(dest), "--json"]
+    assert main(args) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["available"] is False
+    assert payload["current"] == "1.0.0"
+    assert payload["applied"] is False
+
+
+def test_update_json_applies(tmp_path, keyset, capsys):
+    repo, dest, public = _install_v1(tmp_path, keyset)
+    private, _ = keyset
+    v2 = write_project(tmp_path / "src2", "1.1.0", V2_FILES)
+    main(["publish", str(v2), "--repo", str(repo), "--key", str(private)])
+    capsys.readouterr()
+    args = ["update", "--repo", str(repo), "--pub", str(public), "--dest", str(dest), "--json"]
+    assert main(args) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["applied"] is True
+    assert payload["target"] == "1.1.0"
+    assert (dest / "uranai" / "themes.py").is_file()

@@ -18,6 +18,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 )
 
 from .errors import VerificationError
+from .hashing import hash_bytes
 
 
 def generate() -> Ed25519PrivateKey:
@@ -56,6 +57,16 @@ def public_from_text(text: str) -> Ed25519PublicKey:
         return Ed25519PublicKey.from_public_bytes(raw)
     except Exception as error:
         raise VerificationError(f"公開鍵として読めない: {error}") from error
+
+
+def fingerprint(public: Ed25519PublicKey) -> str:
+    """公開鍵の短い指紋。配布側と利用側が同じ鍵かを目視で照合するのに使う。"""
+    raw = public.public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+    digest = hash_bytes(raw)
+    return ":".join(digest[i : i + 4] for i in range(0, 16, 4))
 
 
 def sign(key: Ed25519PrivateKey, data: bytes) -> str:
