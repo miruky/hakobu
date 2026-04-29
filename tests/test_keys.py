@@ -42,3 +42,16 @@ def test_private_key_file_round_trip(tmp_path, signing_key):
     assert path.stat().st_mode & 0o777 == 0o600
     loaded = keys.load_private(path)
     assert keys.public_text(loaded) == keys.public_text(signing_key)
+
+
+def test_fingerprint_is_stable_and_key_specific(signing_key):
+    public = signing_key.public_key()
+    fp = keys.fingerprint(public)
+    assert keys.fingerprint(public) == fp
+    assert fp.count(":") == 3
+    assert keys.fingerprint(keys.generate().public_key()) != fp
+
+
+def test_fingerprint_survives_text_round_trip(signing_key):
+    restored = keys.public_from_text(keys.public_text(signing_key))
+    assert keys.fingerprint(restored) == keys.fingerprint(signing_key.public_key())
