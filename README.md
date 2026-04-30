@@ -103,6 +103,15 @@ $ hakobu update --repo https://example.com/repo --pub signing.pub --dest ~/apps/
 
 `--repo` はローカルパスでもURLでもよい。URLからの取得は `--timeout` 秒(既定30)で打ち切るので、配信元が落ちていても更新コマンドが固まらない。現在の状態は `hakobu status --dest DIR` で確認できる。
 
+更新すると直前の版を `<dest>.hakobu-backup` として隣に残し、新版に不具合が出たら1つ前へ戻せる。`status` は戻し先のバージョンも示す。
+
+```
+$ hakobu rollback --dest ~/apps/uranai
+1.0.0 へ戻した
+```
+
+戻せるのは直前の1世代だけで、戻すとバックアップは消費される。容量を惜しむ環境では `update --no-backup` でバックアップを残さないようにできる(その場合ロールバックはできない)。ロールバックはローカルのディレクトリを入れ替えるだけなので、リポジトリにも公開鍵にも接続しない。
+
 `status` `list` `verify` と `update --check` は `--json` を付けると機械可読の出力に切り替わる。更新の有無を別プロセスから判定したいときに使う。
 
 ```
@@ -123,6 +132,9 @@ plan = updater.check()
 if plan is not None:
     print(f"{plan.current} から {plan.target.version} へ更新します")
     updater.apply(plan)
+    # 起動確認に失敗したら直前の版へ戻す
+    if not launches_ok():
+        updater.rollback()
 ```
 
 ## プロジェクト構成
@@ -133,9 +145,9 @@ if plan is not None:
   - `manifest.py` — 正規形JSONのチャネルマニフェスト
   - `delta.py` — 差分パッチの生成と適用
   - `repo.py` — リリースリポジトリへの公開と署名
-  - `update.py` — 検証・差分適用・原子的入れ替えを行う更新クライアント
+  - `update.py` — 検証・差分適用・原子的入れ替え・ロールバックを行う更新クライアント
   - `version.py` — バージョン番号の比較
-  - `cli.py` — keygen / build / publish / verify / list / prune / install / update / status
+  - `cli.py` — keygen / build / publish / verify / list / prune / install / update / rollback / status
 - `tests/` — 単体テストとCLIを通したリリースフローのテスト
 
 ## はじめ方
@@ -159,6 +171,8 @@ make lint   # ruff check + ruff format --check
 ## 設計方針
 
 **検証してからでなければ書かない。** ダウンロードしたバイト列はハッシュ照合と署名検証を通ってから初めて展開され、適用はインストール先の複製に対して行う。複製のツリー全体がマニフェストの指紋と一致して初めて、renameで本体と入れ替える。失敗したらどの段階でも元のバージョンが残る。
+
+**前へ戻れるようにする。** 入れ替えで押し出した直前の版は捨てずに隣へ残す。新版が検証を通っても実環境で動かないことはあるので、`rollback` で1コマンド戻せるようにした。戻しも検証済みツリーのrenameだけで、ネットワークには触れない。保持するのは1世代分で、容量を惜しむ場合は残さない選択もできる。
 
 **ビルドを決定的にする。** tar.gzのmtime・所有者・並び順を固定し、同じソースからは同じバイト列を作る。ハッシュと署名が安定するため、「ビルドし直したら配布物が変わった」が起きない。
 
