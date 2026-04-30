@@ -64,6 +64,30 @@ def test_progress_is_silent_on_non_tty():
     assert plain.getvalue() == ""
 
 
+def test_cell_width_counts_fullwidth_as_two():
+    assert console.cell_width("abc") == 3
+    assert console.cell_width("バージョン") == 10
+    assert console.cell_width("1.2.0") == 5
+    # 全角まじりは半角1・全角2で合算する。
+    assert console.cell_width("v1リリース") == 2 + 8
+
+
+def test_pad_aligns_by_display_width():
+    # 表示幅(全角=2)を基準に詰めるので、文字数では揃わない混在文字列も揃う。
+    assert console.pad("バージョン", 12) == "バージョン  "
+    assert console.pad("1.2.0", 12) == "1.2.0       "
+    assert console.cell_width(console.pad("バージョン", 12)) == 12
+    assert console.cell_width(console.pad("1.2.0", 12)) == 12
+
+
+def test_pad_right_alignment():
+    assert console.pad("196 B", 8, align="right") == "   196 B"
+
+
+def test_pad_does_not_truncate_when_already_wide():
+    assert console.pad("バージョン", 3) == "バージョン"
+
+
 def test_runnable_as_module():
     result = subprocess.run(
         [sys.executable, "-m", "hakobu", "--version"],
