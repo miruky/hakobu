@@ -1,10 +1,12 @@
+import shutil
+
 import pytest
 
 from hakobu import bundle, keys
 from hakobu.errors import UpdateError, VerificationError
 from hakobu.hashing import hash_tree
 from hakobu.repo import Repository
-from hakobu.update import State, Updater
+from hakobu.update import BACKUP_SUFFIX, State, Updater
 from tests.conftest import write_project
 
 V2_FILES = {
@@ -119,3 +121,68 @@ class TestApply:
         dest = tmp_path / "another"
         with pytest.raises(VerificationError):
             Updater(str(repo.root), dest, stranger).install()
+
+
+def _backup_of(updater):
+    return updater.install_dir.with_name(updater.install_dir.name + BACKUP_SUFFIX)
+
+
+class TestRollback:
+    def test_update_keeps_previous_version_as_backup(self, tmp_path, repo, signing_key, installed):
+        publish_v2(tmp_path, repo, signing_key)
+        installed.apply(installed.check())
+        backup = _backup_of(installed)
+        assert backup.is_dir()
+        assert State.load(backup).version == "1.0.0"
+        assert installed.rollback_target() == "1.0.0"
+
+    def test_rollback_restores_previous_tree(self, tmp_path, repo, signing_key, installed):
+        before = hash_tree(installed.install_dir)
+        publish_v2(tmp_path, repo, signing_key)
+        installed.apply(installed.check())
+        assert (installed.install_dir / "uranai" / "themes.py").is_file()
+        target = installed.rollback()
+        assert target == "1.0.0"
+        assert State.load(installed.install_dir).version == "1.0.0"
+        # 1.1 で増えたファイルは消え、ツリーは更新前の指紋に戻る。
+        assert not (installed.install_dir / "uranai" / "themes.py").exists()
+        assert hash_tree(installed.install_dir) == before
+
+    def test_full_update_also_keeps_backup(self, tmp_path, repo, signing_key, installed):
+        publish_v2(tmp_path, repo, signing_key)
+        plan = installed.check()
+        plan.patch = None
+        installed.apply(plan)
+        assert installed.rollback_target() == "1.0.0"
+        assert installed.rollback() == "1.0.0"
+
+    def test_rollback_is_one_level_only(self, tmp_path, repo, signing_key, installed):
+        publish_v2(tmp_path, repo, signing_key)
+        installed.apply(installed.check())
+        installed.rollback()
+        # 戻すとバックアップは消費されるので、続けて2世代前へは戻れない。
+        assert installed.rollback_target() is None
+        assert not _backup_of(installed).exists()
+        with pytest.raises(UpdateError):
+            installed.rollback()
+
+    def test_rollback_without_backup_raises(self, installed):
+        assert installed.rollback_target() is None
+        with pytest.raises(UpdateError):
+            installed.rollback()
+
+    def test_no_backup_leaves_nothing_to_roll_back(self, tmp_path, repo, signing_key, installed):
+        publish_v2(tmp_path, repo, signing_key)
+        installed.apply(installed.check(), keep_backup=False)
+        assert installed.rollback_target() is None
+        assert not _backup_of(installed).exists()
+
+    def test_fresh_install_clears_stale_backup(self, tmp_path, repo, signing_key, installed):
+        # 一度更新してバックアップを残し、消してから別アプリを同じ場所に導入し直す。
+        publish_v2(tmp_path, repo, signing_key)
+        installed.apply(installed.check())
+        assert _backup_of(installed).is_dir()
+        shutil.rmtree(installed.install_dir)
+        installed.install()
+        assert not _backup_of(installed).exists()
+        assert installed.rollback_target() is None

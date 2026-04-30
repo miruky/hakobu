@@ -1,7 +1,7 @@
 """hakobuのコマンドラインインターフェース。
 
-リリース側(keygen / build / publish / verify)と
-利用側(install / update / status)の両方をここから操作する。
+リリース側(keygen / build / publish / verify / prune)と
+利用側(install / update / rollback / status)の両方をここから操作する。
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 
 from . import __version__, bundle, console, keys
+from . import update as update_mod
 from . import version as version_mod
 from .errors import ConfigError, HakobuError, VerificationError
 from .hashing import hash_file
@@ -91,9 +92,19 @@ def _build_parser() -> argparse.ArgumentParser:
     update.add_argument("--pub", type=Path, required=True)
     update.add_argument("--dest", type=Path, required=True)
     update.add_argument("--check", action="store_true", help="確認だけして適用しない")
+    update.add_argument(
+        "--no-backup",
+        action="store_true",
+        help="直前の版をロールバック用に残さない(容量を惜しむとき)",
+    )
     update.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT, help=_TIMEOUT_HELP)
     update.add_argument("--json", action="store_true", help="結果をJSONで出力する")
     update.set_defaults(handler=_cmd_update)
+
+    rollback = sub.add_parser("rollback", help="直前の版へ戻す")
+    rollback.add_argument("--dest", type=Path, required=True)
+    rollback.add_argument("--json", action="store_true", help="結果をJSONで出力する")
+    rollback.set_defaults(handler=_cmd_rollback)
 
     status = sub.add_parser("status", help="導入済みのアプリとバージョンを表示する")
     status.add_argument("--dest", type=Path, required=True)
@@ -228,20 +239,37 @@ def _cmd_update(args: argparse.Namespace) -> int:
         else:
             console.success(f"{plan.current} から {plan.target.version} へ更新できる({how})")
         return 0
-    release = updater.apply(plan)
+    release = updater.apply(plan, keep_backup=not args.no_backup)
     if args.json:
         _emit_json(_update_record(plan.current, release.version, delta=plan.delta, applied=True))
     else:
         console.success(f"{plan.current} から {release.version} へ更新した({how})")
+        if not args.no_backup:
+            console.detail(f"  hakobu rollback で {plan.current} へ戻せる")
+    return 0
+
+
+def _cmd_rollback(args: argparse.Namespace) -> int:
+    version = update_mod.rollback(args.dest)
+    if args.json:
+        _emit_json({"rolled_back_to": version})
+    else:
+        console.success(f"{version} へ戻した")
     return 0
 
 
 def _cmd_status(args: argparse.Namespace) -> int:
     state = State.load(args.dest)
+    rollback_to = update_mod.rollback_target(args.dest)
     if args.json:
-        _emit_json({"app": state.app, "channel": state.channel, "version": state.version})
+        payload = {"app": state.app, "channel": state.channel, "version": state.version}
+        if rollback_to is not None:
+            payload["rollback_to"] = rollback_to
+        _emit_json(payload)
         return 0
     console.heading(f"{state.app} {state.version}({state.channel} チャネル)")
+    if rollback_to is not None:
+        console.detail(f"  ロールバック先: {rollback_to}")
     return 0
 
 

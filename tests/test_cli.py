@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from hakobu import console
 from hakobu.cli import main
 from tests.conftest import write_project
 
@@ -114,6 +115,40 @@ def test_list_shows_releases(tmp_path, keyset, capsys):
     assert "1.1.0" in out
     assert "1.0.0" in out
     assert "初版" in out
+
+
+def test_list_table_columns_align(tmp_path, keyset, capsys):
+    private, _ = keyset
+    repo = tmp_path / "repo"
+    v1 = write_project(tmp_path / "src1", "1.0.0")
+    main(["publish", str(v1), "--repo", str(repo), "--key", str(private), "--notes", "初版"])
+    v2 = write_project(tmp_path / "src2", "1.1.0", V2_FILES)
+    main(["publish", str(v2), "--repo", str(repo), "--key", str(private)])
+    capsys.readouterr()
+    main(["list", "--repo", str(repo)])
+    lines = capsys.readouterr().out.splitlines()
+    header = next(line for line in lines if "公開日" in line)
+    rows = [line for line in lines if "1.0.0" in line or "1.1.0" in line]
+    assert "メモ" in header  # メモを持つリリースがあるので列が立つ
+
+    def offset(line: str, needle: str) -> int:
+        return console.cell_width(line[: line.index(needle)])
+
+    # 公開日列の頭が、見出しと各データ行で同じ表示幅位置にある(全角込みで整列)。
+    for row in rows:
+        assert offset(row, "2026") == offset(header, "公開日")
+
+
+def test_list_omits_memo_column_without_notes(tmp_path, keyset, capsys):
+    private, _ = keyset
+    repo = tmp_path / "repo"
+    v1 = write_project(tmp_path / "src1", "1.0.0")
+    main(["publish", str(v1), "--repo", str(repo), "--key", str(private)])
+    capsys.readouterr()
+    main(["list", "--repo", str(repo)])
+    out = capsys.readouterr().out
+    assert "バージョン" in out
+    assert "メモ" not in out
 
 
 def test_quiet_suppresses_success_output(tmp_path, keyset, capsys):
@@ -272,6 +307,73 @@ def test_update_json_applies(tmp_path, keyset, capsys):
     assert payload["applied"] is True
     assert payload["target"] == "1.1.0"
     assert (dest / "uranai" / "themes.py").is_file()
+
+
+def _publish_v2(tmp_path, repo, keyset):
+    private, _ = keyset
+    v2 = write_project(tmp_path / "src2", "1.1.0", V2_FILES)
+    main(["publish", str(v2), "--repo", str(repo), "--key", str(private)])
+
+
+def test_rollback_cli_restores_previous(tmp_path, keyset, capsys):
+    repo, dest, public = _install_v1(tmp_path, keyset)
+    _publish_v2(tmp_path, repo, keyset)
+    main(["update", "--repo", str(repo), "--pub", str(public), "--dest", str(dest)])
+    capsys.readouterr()
+    assert main(["rollback", "--dest", str(dest)]) == 0
+    assert "1.0.0 へ戻した" in capsys.readouterr().out
+    assert not (dest / "uranai" / "themes.py").exists()
+    capsys.readouterr()
+    main(["status", "--dest", str(dest)])
+    assert "uranai 1.0.0" in capsys.readouterr().out
+
+
+def test_rollback_cli_json(tmp_path, keyset, capsys):
+    repo, dest, public = _install_v1(tmp_path, keyset)
+    _publish_v2(tmp_path, repo, keyset)
+    main(["update", "--repo", str(repo), "--pub", str(public), "--dest", str(dest)])
+    capsys.readouterr()
+    assert main(["rollback", "--dest", str(dest), "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"rolled_back_to": "1.0.0"}
+
+
+def test_rollback_cli_without_backup_is_clean_error(tmp_path, keyset, capsys):
+    _, dest, _ = _install_v1(tmp_path, keyset)
+    capsys.readouterr()
+    code = main(["rollback", "--dest", str(dest)])
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "戻せる前のバージョンがない" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_update_announces_rollback(tmp_path, keyset, capsys):
+    repo, dest, public = _install_v1(tmp_path, keyset)
+    _publish_v2(tmp_path, repo, keyset)
+    capsys.readouterr()
+    main(["update", "--repo", str(repo), "--pub", str(public), "--dest", str(dest)])
+    assert "rollback" in capsys.readouterr().out
+
+
+def test_update_no_backup_disables_rollback(tmp_path, keyset, capsys):
+    repo, dest, public = _install_v1(tmp_path, keyset)
+    _publish_v2(tmp_path, repo, keyset)
+    args = ["update", "--repo", str(repo), "--pub", str(public), "--dest", str(dest), "--no-backup"]
+    assert main(args) == 0
+    capsys.readouterr()
+    assert main(["rollback", "--dest", str(dest)]) == 1
+    assert "戻せる前のバージョンがない" in capsys.readouterr().err
+
+
+def test_status_json_includes_rollback_to(tmp_path, keyset, capsys):
+    repo, dest, public = _install_v1(tmp_path, keyset)
+    _publish_v2(tmp_path, repo, keyset)
+    main(["update", "--repo", str(repo), "--pub", str(public), "--dest", str(dest)])
+    capsys.readouterr()
+    assert main(["status", "--dest", str(dest), "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["version"] == "1.1.0"
+    assert payload["rollback_to"] == "1.0.0"
 
 
 def test_keygen_shows_fingerprint(tmp_path, capsys):

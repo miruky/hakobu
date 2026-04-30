@@ -35,6 +35,12 @@ from .repo import MANIFEST_NAME, SIGNATURE_NAME
 DEFAULT_TIMEOUT = 30.0
 """URLリポジトリへの接続・読み出しの既定タイムアウト(秒)。"""
 
+BACKUP_SUFFIX = ".hakobu-backup"
+"""更新時に直前の版を残すバックアップディレクトリの接尾辞。入れ替え先の隣に置く。"""
+
+SCRATCH_SUFFIX = ".hakobu-old"
+"""入れ替えの最中だけ存在する退避先の接尾辞。成功後は残らない。"""
+
 
 class Source:
     """リポジトリの読み出し口。ローカルパスと http(s) URLを同じ顔で扱う。
@@ -122,6 +128,10 @@ class Updater:
         """空のインストール先へ完全アーカイブから導入する。"""
         if self.install_dir.exists() and any(self.install_dir.iterdir()):
             raise UpdateError(f"インストール先が空でない: {self.install_dir}")
+        # 別アプリの名残のバックアップは新規導入には無関係なので片付ける。
+        backup = _backup_dir(self.install_dir)
+        if backup.exists():
+            shutil.rmtree(backup)
         manifest = self.fetch_manifest()
         release = manifest.release(target_version) if target_version else manifest.latest()
         # 作業用の一時ディレクトリは入れ替え先と同じ親に置く(renameを同一FS内に保つ)
@@ -155,8 +165,12 @@ class Updater:
             patch=release.patch_from(state.version),
         )
 
-    def apply(self, plan: UpdatePlan) -> Release:
-        """計画に従って更新する。差分が使えなければ完全アーカイブに切り替える。"""
+    def apply(self, plan: UpdatePlan, *, keep_backup: bool = True) -> Release:
+        """計画に従って更新する。差分が使えなければ完全アーカイブに切り替える。
+
+        keep_backup が真なら、入れ替え後に直前の版を `<dest>.hakobu-backup` として
+        残し、`rollback()` で1つ前へ戻せるようにする。容量を惜しむ場合は偽にする。
+        """
         state = State.load(self.install_dir)
         with TemporaryDirectory(dir=self.install_dir.parent) as tmp:
             staging = Path(tmp) / "tree"
@@ -176,8 +190,16 @@ class Updater:
                 self._stage_full(plan.target, staging)
             self._verify_tree(staging, plan.target)
             State(app=state.app, channel=state.channel, version=plan.target.version).write(staging)
-            self._swap(staging)
+            self._swap(staging, keep_backup=keep_backup)
         return plan.target
+
+    def rollback(self) -> str:
+        """直前の版へ戻す。戻し先のバージョンを返す。"""
+        return rollback(self.install_dir)
+
+    def rollback_target(self) -> str | None:
+        """ロールバックで戻る先のバージョン。残っていなければ None。"""
+        return rollback_target(self.install_dir)
 
     def _stage_full(self, release: Release, staging: Path) -> None:
         data = self._verified_bytes(release.archive)
@@ -206,14 +228,66 @@ class Updater:
                 f"更新後のファイルがマニフェストと一致しない: {', '.join(sorted(mismatched))}"
             )
 
-    def _swap(self, staging: Path) -> None:
-        backup = self.install_dir.with_name(self.install_dir.name + ".hakobu-old")
-        if backup.exists():
-            shutil.rmtree(backup)
-        self.install_dir.rename(backup)
+    def _swap(self, staging: Path, *, keep_backup: bool = True) -> None:
+        """検証済みのツリーを原子的に本体へ入れ替える。
+
+        旧版はまず退避先(scratch)へ rename し、新版を本体へ rename する。
+        途中で失敗したら退避先を戻す。成功後、keep_backup なら退避先を
+        バックアップへ昇格させ(rollback 用)、そうでなければ捨てる。
+        """
+        scratch = self.install_dir.with_name(self.install_dir.name + SCRATCH_SUFFIX)
+        if scratch.exists():
+            shutil.rmtree(scratch)
+        self.install_dir.rename(scratch)
         try:
             staging.rename(self.install_dir)
         except OSError as error:
-            backup.rename(self.install_dir)
+            scratch.rename(self.install_dir)
             raise UpdateError(f"入れ替えに失敗したため元に戻した: {error}") from error
-        shutil.rmtree(backup)
+        backup = _backup_dir(self.install_dir)
+        if backup.exists():
+            shutil.rmtree(backup)
+        if keep_backup:
+            scratch.rename(backup)
+        else:
+            shutil.rmtree(scratch)
+
+
+def _backup_dir(install_dir: Path) -> Path:
+    """インストール先の隣に置くバックアップディレクトリのパス。"""
+    return install_dir.with_name(install_dir.name + BACKUP_SUFFIX)
+
+
+def rollback_target(install_dir: Path) -> str | None:
+    """直前の版(ロールバック先)のバージョン。残っていなければ None。"""
+    backup = _backup_dir(install_dir)
+    if not (backup / STATE_FILE_NAME).is_file():
+        return None
+    try:
+        return State.load(backup).version
+    except UpdateError:
+        return None
+
+
+def rollback(install_dir: Path) -> str:
+    """直前の版へ原子的に戻し、戻し先のバージョンを返す。
+
+    update が `keep_backup=True`(既定)で残したバックアップを使う。戻すと
+    バックアップは消費されるので、続けて2世代前へは戻れない。検証済みの
+    ツリーを入れ替えるだけなので、リポジトリにも公開鍵にも接続しない。
+    """
+    backup = _backup_dir(install_dir)
+    target = rollback_target(install_dir)
+    if target is None:
+        raise UpdateError(f"戻せる前のバージョンがない: {install_dir}")
+    scratch = install_dir.with_name(install_dir.name + SCRATCH_SUFFIX)
+    if scratch.exists():
+        shutil.rmtree(scratch)
+    install_dir.rename(scratch)
+    try:
+        backup.rename(install_dir)
+    except OSError as error:
+        scratch.rename(install_dir)
+        raise UpdateError(f"ロールバックに失敗したため元に戻した: {error}") from error
+    shutil.rmtree(scratch)
+    return target
