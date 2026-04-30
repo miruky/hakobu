@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from hakobu import console
 from hakobu.cli import main
 from tests.conftest import write_project
 
@@ -114,6 +115,40 @@ def test_list_shows_releases(tmp_path, keyset, capsys):
     assert "1.1.0" in out
     assert "1.0.0" in out
     assert "初版" in out
+
+
+def test_list_table_columns_align(tmp_path, keyset, capsys):
+    private, _ = keyset
+    repo = tmp_path / "repo"
+    v1 = write_project(tmp_path / "src1", "1.0.0")
+    main(["publish", str(v1), "--repo", str(repo), "--key", str(private), "--notes", "初版"])
+    v2 = write_project(tmp_path / "src2", "1.1.0", V2_FILES)
+    main(["publish", str(v2), "--repo", str(repo), "--key", str(private)])
+    capsys.readouterr()
+    main(["list", "--repo", str(repo)])
+    lines = capsys.readouterr().out.splitlines()
+    header = next(line for line in lines if "公開日" in line)
+    rows = [line for line in lines if "1.0.0" in line or "1.1.0" in line]
+    assert "メモ" in header  # メモを持つリリースがあるので列が立つ
+
+    def offset(line: str, needle: str) -> int:
+        return console.cell_width(line[: line.index(needle)])
+
+    # 公開日列の頭が、見出しと各データ行で同じ表示幅位置にある(全角込みで整列)。
+    for row in rows:
+        assert offset(row, "2026") == offset(header, "公開日")
+
+
+def test_list_omits_memo_column_without_notes(tmp_path, keyset, capsys):
+    private, _ = keyset
+    repo = tmp_path / "repo"
+    v1 = write_project(tmp_path / "src1", "1.0.0")
+    main(["publish", str(v1), "--repo", str(repo), "--key", str(private)])
+    capsys.readouterr()
+    main(["list", "--repo", str(repo)])
+    out = capsys.readouterr().out
+    assert "バージョン" in out
+    assert "メモ" not in out
 
 
 def test_quiet_suppresses_success_output(tmp_path, keyset, capsys):
