@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import sys
+import unicodedata
 from typing import IO
 
 _CODES = {
@@ -46,6 +47,21 @@ def style(text: str, kind: str, *, stream: IO[str] | None = None) -> str:
     if code is None or not use_color(target):
         return text
     return f"\x1b[{code}m{text}\x1b[0m"
+
+
+def cell_width(text: str) -> int:
+    """端末上での表示幅。全角(東アジアの広い文字)は2、それ以外は1で数える。
+
+    日本語の見出しを含む表は、文字数で揃えると桁がずれる。`list` の整列は
+    この幅を基準にするので、全角まじりでも列が縦に揃う。
+    """
+    return sum(2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1 for ch in text)
+
+
+def pad(text: str, width: int, *, align: str = "left") -> str:
+    """表示幅が width になるよう空白を足す。align="right" で右揃え。"""
+    gap = max(0, width - cell_width(text))
+    return " " * gap + text if align == "right" else text + " " * gap
 
 
 def success(message: str) -> None:
