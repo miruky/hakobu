@@ -42,7 +42,10 @@
 $ hakobu keygen --dir keys
 秘密鍵: keys/signing.key(リリース担当者だけが持つ)
 公開鍵: keys/signing.pub(アプリ側に同梱する)
+指紋: 2c67:6661:e30d:8886
 ```
+
+指紋は公開鍵の短いダイジェストで、配布側と利用側が同じ鍵を使っているかを目で照合するのに使う。`hakobu verify` も検証に使った鍵の指紋を併せて表示する。
 
 ### 2. プロジェクトに hakobu.toml を置く
 
@@ -74,6 +77,17 @@ uranai 1.1.0 を stable チャネルへ公開した
 
 repoディレクトリをそのままWebサーバーなどへ同期すれば配布開始になる。`hakobu verify --repo ./repo --pub keys/signing.pub` で、リポジトリ全成果物の署名とハッシュを一括検証できる。
 
+公開済みのリリースは `hakobu list --repo ./repo` で一覧でき、古い版がたまってきたら整理する。
+
+```
+$ hakobu prune --repo ./repo --key keys/signing.key --keep 5
+2 件のリリースを取り除いた
+  バージョン: 1.0.0, 1.1.0
+  ファイル 7 件を削除した
+```
+
+`prune` は最新の数件だけを残し、外したバージョンのアーカイブと、もう使われない差分パッチを消す。マニフェストは残った内容で署名し直されるので、整理後も `verify` を通る。
+
 ### 4. 利用側で導入・更新する
 
 ```
@@ -87,7 +101,14 @@ $ hakobu update --repo https://example.com/repo --pub signing.pub --dest ~/apps/
 1.0.0 から 1.1.0 へ更新した(差分パッチ)
 ```
 
-`--repo` はローカルパスでもURLでもよい。現在の状態は `hakobu status --dest DIR` で確認できる。
+`--repo` はローカルパスでもURLでもよい。URLからの取得は `--timeout` 秒(既定30)で打ち切るので、配信元が落ちていても更新コマンドが固まらない。現在の状態は `hakobu status --dest DIR` で確認できる。
+
+`status` `list` `verify` と `update --check` は `--json` を付けると機械可読の出力に切り替わる。更新の有無を別プロセスから判定したいときに使う。
+
+```
+$ hakobu update --repo https://example.com/repo --pub signing.pub --dest ~/apps/uranai --check --json
+{"current": "1.0.0", "available": true, "target": "1.1.0", "delta": true, "applied": false}
+```
 
 ### ライブラリとして組み込む
 
@@ -114,7 +135,7 @@ if plan is not None:
   - `repo.py` — リリースリポジトリへの公開と署名
   - `update.py` — 検証・差分適用・原子的入れ替えを行う更新クライアント
   - `version.py` — バージョン番号の比較
-  - `cli.py` — keygen / build / publish / verify / install / update / status
+  - `cli.py` — keygen / build / publish / verify / list / prune / install / update / status
 - `tests/` — 単体テストとCLIを通したリリースフローのテスト
 
 ## はじめ方

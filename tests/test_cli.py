@@ -272,3 +272,64 @@ def test_update_json_applies(tmp_path, keyset, capsys):
     assert payload["applied"] is True
     assert payload["target"] == "1.1.0"
     assert (dest / "uranai" / "themes.py").is_file()
+
+
+def test_keygen_shows_fingerprint(tmp_path, capsys):
+    assert main(["keygen", "--dir", str(tmp_path / "keys")]) == 0
+    assert "指紋" in capsys.readouterr().out
+
+
+def test_verify_json(tmp_path, keyset, capsys):
+    private, public = keyset
+    repo = tmp_path / "repo"
+    v1 = write_project(tmp_path / "src1", "1.0.0")
+    main(["publish", str(v1), "--repo", str(repo), "--key", str(private)])
+    capsys.readouterr()
+    assert main(["verify", "--repo", str(repo), "--pub", str(public), "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["verified"] is True
+    assert payload["app"] == "uranai"
+    assert payload["releases"] == 1
+    assert ":" in payload["fingerprint"]
+
+
+def _publish_chain(tmp_path, repo, private, count):
+    for minor in range(count):
+        proj = write_project(tmp_path / f"src{minor}", f"1.{minor}.0")
+        main(["publish", str(proj), "--repo", str(repo), "--key", str(private)])
+
+
+def test_prune_cli_trims_and_repo_still_verifies(tmp_path, keyset, capsys):
+    private, public = keyset
+    repo = tmp_path / "repo"
+    _publish_chain(tmp_path, repo, private, 4)
+    capsys.readouterr()
+    assert main(["prune", "--repo", str(repo), "--key", str(private), "--keep", "2"]) == 0
+    assert "リリースを取り除いた" in capsys.readouterr().out
+    # 整理後もリポジトリ全体が検証を通る。
+    assert main(["verify", "--repo", str(repo), "--pub", str(public)]) == 0
+    capsys.readouterr()
+    main(["list", "--repo", str(repo), "--json"])
+    versions = [r["version"] for r in json.loads(capsys.readouterr().out)["releases"]]
+    assert versions == ["1.3.0", "1.2.0"]
+
+
+def test_prune_cli_noop_within_keep(tmp_path, keyset, capsys):
+    private, _ = keyset
+    repo = tmp_path / "repo"
+    _publish_chain(tmp_path, repo, private, 1)
+    capsys.readouterr()
+    assert main(["prune", "--repo", str(repo), "--key", str(private), "--keep", "5"]) == 0
+    assert "取り除くリリースはなかった" in capsys.readouterr().out
+
+
+def test_prune_cli_missing_key_is_clean_error(tmp_path, keyset, capsys):
+    private, _ = keyset
+    repo = tmp_path / "repo"
+    _publish_chain(tmp_path, repo, private, 1)
+    capsys.readouterr()
+    code = main(["prune", "--repo", str(repo), "--key", str(tmp_path / "nai.key"), "--keep", "1"])
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "秘密鍵が見つからない" in captured.err
+    assert "Traceback" not in captured.err

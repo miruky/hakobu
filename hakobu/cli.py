@@ -14,6 +14,7 @@ from . import __version__, bundle, console, keys
 from . import version as version_mod
 from .errors import ConfigError, HakobuError, VerificationError
 from .hashing import hash_file
+from .manifest import Release
 from .repo import Repository
 from .update import DEFAULT_TIMEOUT, Source, State, Updater
 
@@ -270,15 +271,53 @@ def _cmd_list(args: argparse.Namespace) -> int:
             }
         )
         return 0
-    header = f"{manifest.app}({manifest.channel} チャネル): リリース {len(manifest.releases)} 件"
-    console.heading(header)
-    for release in releases:
-        date = release.created[:10]
-        size = _human_size(release.archive.size)
-        note = f"  {release.notes}" if release.notes else ""
-        row = f"  {release.version:<10} {date}  {size:>9}  パッチ{len(release.patches)}"
-        console.line(row + note)
+    console.heading(f"{manifest.app}({manifest.channel} チャネル): リリース {len(releases)} 件")
+    if not releases:
+        console.detail("  まだリリースがない")
+        return 0
+    header, body = _render_release_table(releases)
+    console.line("")
+    console.detail(header)
+    for row in body:
+        console.line(row)
     return 0
+
+
+# list の表。メモ列はメモを持つリリースが1つでもあるときだけ立てる。
+_LIST_COLUMNS = (
+    ("バージョン", "left"),
+    ("公開日", "left"),
+    ("サイズ", "right"),
+    ("パッチ", "right"),
+)
+
+
+def _render_release_table(releases: list[Release]) -> tuple[str, list[str]]:
+    """整列済みの一覧を (見出し行, 行リスト) にする。全角を2幅として列を縦に揃える。"""
+    has_notes = any(release.notes for release in releases)
+    columns = [*_LIST_COLUMNS, ("メモ", "left")] if has_notes else list(_LIST_COLUMNS)
+    rows = []
+    for release in releases:
+        cells = [
+            release.version,
+            release.created[:10],
+            _human_size(release.archive.size),
+            str(len(release.patches)),
+        ]
+        if has_notes:
+            cells.append(release.notes)
+        rows.append(cells)
+    widths = [
+        max(console.cell_width(title), *(console.cell_width(row[i]) for row in rows))
+        for i, (title, _align) in enumerate(columns)
+    ]
+
+    def render(cells: list[str]) -> str:
+        padded = [console.pad(cell, widths[i], align=columns[i][1]) for i, cell in enumerate(cells)]
+        return ("  " + "  ".join(padded)).rstrip()
+
+    header = render([title for title, _align in columns])
+    return header, [render(cells) for cells in rows]
 
 
 def _human_size(num_bytes: int) -> str:
